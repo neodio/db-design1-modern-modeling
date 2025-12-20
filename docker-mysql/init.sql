@@ -1,0 +1,9 @@
+CREATE DATABASE IF NOT EXISTS my_shop3 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- User
+DROP USER IF EXISTS 'app'@'%';
+CREATE USER 'app'@'%' IDENTIFIED BY 'password';
+GRANT ALL PRIVILEGES ON my_shop3.* TO 'app'@'%';
+FLUSH PRIVILEGES;
+
+USE my_shop3;

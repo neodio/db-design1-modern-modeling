@@ -1,0 +1,2076 @@
+-- 데이터베이스 설계 1편 SQL 소스 파일
+
+----------------------------
+-- # 5. 논리적 모델링1 - 키
+----------------------------
+
+-- ## 자연 키 vs 대리 키1 - 자연 키
+
+-- 데이터베이스가 존재하지 않으면 생성
+CREATE DATABASE IF NOT EXISTS my_shop3;
+USE my_shop3;
+
+
+DROP TABLE IF EXISTS orders_n;
+DROP TABLE IF EXISTS member_n;
+
+-- 잘못된 설계의 시작
+CREATE TABLE member_n (
+    email       VARCHAR(50)  NOT NULL, -- PK (자연 키)
+    password    VARCHAR(255) NOT NULL,
+    name        VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (email)
+);
+
+-- member 테이블을 참조하는 orders 테이블
+CREATE TABLE orders_n (
+    order_id      BIGINT       NOT NULL AUTO_INCREMENT,
+    member_email  VARCHAR(50)  NOT NULL, -- FK
+    ordered_at    DATETIME     NOT NULL,
+    PRIMARY KEY (order_id),
+    CONSTRAINT fk_orders_member_n FOREIGN KEY (member_email)
+        REFERENCES member_n (email)
+);
+
+
+-- 기존 이메일로 회원 가입
+INSERT INTO member_n (email, password, name)
+VALUES ('member1@old.com', 'hashed_password', '네이트');
+
+-- 해당 회원이 상품 주문
+INSERT INTO orders_n (member_email, ordered_at)
+VALUES ('member1@old.com', NOW());
+
+UPDATE member_n SET email = 'member1@new.com' WHERE email = 'member1@old.com';
+
+
+-- 자연 키 vs 대리 키2 - 대리 키
+
+DROP TABLE IF EXISTS orders_s;
+DROP TABLE IF EXISTS member_s;
+
+-- 올바른 설계
+CREATE TABLE member_s (
+    member_id   BIGINT       NOT NULL AUTO_INCREMENT, -- PK (대리 키)
+    email       VARCHAR(50) NOT NULL,                -- 비즈니스 로직
+    password    VARCHAR(255) NOT NULL,
+    name        VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (member_id),
+    UNIQUE KEY uq_email (email) -- 고유해야 하는 자연 키는 UNIQUE로!
+);
+
+-- member_s 테이블을 안정적으로 참조하는 orders_s 테이블
+CREATE TABLE orders_s (
+    order_id    BIGINT       NOT NULL AUTO_INCREMENT,
+    member_id   BIGINT       NOT NULL,                 -- FK
+    ordered_at  DATETIME     NOT NULL,
+    PRIMARY KEY (order_id),
+    CONSTRAINT fk_orders_member_s FOREIGN KEY (member_id) REFERENCES member_s (member_id)
+);
+
+-- 기존 이메일로 회원 가입
+INSERT INTO member_s (email, password, name)
+VALUES ('member1@old.com', 'hashed_password', '네이트');
+
+-- 앞서 저장한 회원 ID 임시 저장
+SET @last_member_id = LAST_INSERT_ID();
+
+-- 해당 회원이 상품 주문
+INSERT INTO orders_s (member_id, ordered_at)
+VALUES (@last_member_id, NOW());
+
+
+UPDATE member_s
+SET email = 'member1@new.com'
+WHERE member_id = 1;
+
+SELECT * FROM member_s;
+SELECT * FROM orders_s;
+
+
+-- ## 자연 키 vs 대리 키3 - 성능 트레이드 오프
+
+SELECT order_id, member_email, ordered_at FROM orders_n;
+
+SELECT
+    o.order_id,
+    m.email AS member_email,
+    o.ordered_at
+FROM orders_s o
+JOIN member_s m ON o.member_id = m.member_id;
+
+SELECT * FROM orders_n WHERE member_email LIKE 'member1%';
+
+SELECT
+    o.order_id,
+    o.member_id,
+    o.ordered_at
+FROM orders_s o
+JOIN member_s m ON o.member_id = m.member_id
+WHERE m.email LIKE 'member1%';
+
+-- 주문 ID 100번에 대한 회원의 email을 확인하려면 JOIN이 필수다.
+SELECT m.email
+  FROM orders o
+  JOIN member m ON o.member_id = m.member_id
+WHERE o.order_id = 100;
+
+-- member 테이블에는 2개의 인덱스가 필요하다.
+-- 1. 기본 키(PK) 인덱스: member_id
+-- 2. 고유(UNIQUE) 인덱스: email
+CREATE TABLE member (
+    member_id BIGINT NOT NULL AUTO_INCREMENT,
+    email  VARCHAR(50) NOT NULL,
+    ...
+    PRIMARY KEY (member_id),
+    UNIQUE KEY uq_email (email)
+);
+
+
+-- ## 복합키 설계
+
+DROP TABLE IF EXISTS popcorn_order_c;
+DROP TABLE IF EXISTS movie_reservation_c;
+
+CREATE TABLE movie_reservation_c (
+    movie_title      VARCHAR(100) NOT NULL, -- 영화 제목
+    screening_dt     DATETIME     NOT NULL, -- 상영 시작 시간
+    seat_number      VARCHAR(10)  NOT NULL, -- 좌석 번호
+    reserver_name    VARCHAR(50)  NOT NULL, -- 예매자 이름
+
+    -- 복합키: movie_title + screening_dt + seat_number를 기본 키로 설정
+    PRIMARY KEY (movie_title, screening_dt, seat_number)
+);
+
+CREATE TABLE popcorn_order_c (
+    popcorn_order_id BIGINT       NOT NULL AUTO_INCREMENT,
+    movie_title      VARCHAR(100) NOT NULL, -- FK1
+    screening_dt     DATETIME     NOT NULL, -- FK2
+    seat_number      VARCHAR(10)  NOT NULL, -- FK3
+    popcorn_name     VARCHAR(50),
+    PRIMARY KEY (popcorn_order_id),
+    FOREIGN KEY (movie_title, screening_dt, seat_number)
+        REFERENCES movie_reservation_c (movie_title, screening_dt, seat_number)
+);
+
+-- 샘플 데이터 삽입
+INSERT INTO movie_reservation_c (movie_title, screening_dt, seat_number, reserver_name)
+VALUES ('매트릭스1', '2025-08-31 19:30:00', 'F8', '네이트');
+
+INSERT INTO popcorn_order_c (popcorn_order_id, movie_title, screening_dt, seat_number, popcorn_name)
+VALUES (101, '매트릭스1', '2025-08-31 19:30:00', 'F8', '카라멜/치토스 팝콘');
+
+SELECT
+    mr.reserver_name,
+    po.popcorn_order_id,
+    po.popcorn_name
+FROM
+    popcorn_order_c po
+JOIN
+    movie_reservation_c mr
+ON
+    po.movie_title = mr.movie_title
+    AND po.screening_dt = mr.screening_dt
+    AND po.seat_number = mr.seat_number
+WHERE
+    po.popcorn_order_id = 101;
+
+
+DROP TABLE IF EXISTS popcorn_order_s;
+DROP TABLE IF EXISTS movie_reservation_s;
+
+-- 예매 테이블 (대리 키 사용)
+CREATE TABLE movie_reservation_s (
+    reservation_id   BIGINT       NOT NULL AUTO_INCREMENT, -- 대리 키 PK
+    movie_title      VARCHAR(100) NOT NULL,
+    screening_dt     DATETIME     NOT NULL,
+    seat_number      VARCHAR(10)  NOT NULL,
+    reserver_name    VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (reservation_id),
+    -- 자연 키 부분에 UNIQUE 제약으로 데이터 무결성 보장
+    UNIQUE KEY uq_movie_reservation (movie_title, screening_dt, seat_number)
+);
+
+-- 팝콘 주문 테이블 (대리 키 참조)
+CREATE TABLE popcorn_order_s (
+    popcorn_order_id BIGINT      NOT NULL AUTO_INCREMENT,
+    reservation_id   BIGINT      NOT NULL, -- 단순화된 FK
+    popcorn_name     VARCHAR(50),
+    PRIMARY KEY (popcorn_order_id),
+    FOREIGN KEY (reservation_id) REFERENCES movie_reservation_s (reservation_id)
+);
+
+-- 샘플 데이터 삽입
+INSERT INTO movie_reservation_s (movie_title, screening_dt, seat_number, reserver_name)
+VALUES ('매트릭스1', '2025-08-31 19:30:00', 'F8', '네이트');
+
+-- movie_reservation_s 테이블에 방금 입력된 reservation_id는 1이다.
+INSERT INTO popcorn_order_s (reservation_id, popcorn_name)
+VALUES (1, '카라멜/치토스 팝콘');
+
+-- popcorn_order_id가 1인 주문 조회
+SELECT
+    mr.reserver_name,
+    po.popcorn_order_id,
+    po.popcorn_name
+FROM
+    popcorn_order_s po
+JOIN
+    movie_reservation_s mr ON po.reservation_id = mr.reservation_id
+WHERE
+    po.popcorn_order_id = 1;
+
+
+-- ## 다대다 관계와 복합키
+-- 테이블 초기화
+DROP TABLE IF EXISTS order_item_c;
+DROP TABLE IF EXISTS orders_c;
+DROP TABLE IF EXISTS product_c;
+
+-- 상품 테이블 생성
+CREATE TABLE product_c (
+    product_id   BIGINT       NOT NULL AUTO_INCREMENT,
+    name         VARCHAR(100) NOT NULL,
+    price        INT          NOT NULL,
+    PRIMARY KEY (product_id)
+);
+
+-- 주문 테이블 생성
+CREATE TABLE orders_c (
+    order_id   BIGINT   NOT NULL AUTO_INCREMENT,
+    ordered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (order_id)
+);
+
+-- 주문 항목 테이블 생성 (복합키 사용)
+CREATE TABLE order_item_c (
+    order_id     BIGINT NOT NULL, -- 주문 ID (PK, FK)
+    product_id   BIGINT NOT NULL, -- 상품 ID (PK, FK)
+    order_price  INT    NOT NULL, -- 주문 당시 가격
+    count        INT    NOT NULL, -- 주문 수량
+    PRIMARY KEY (order_id, product_id), -- 복합 기본 키
+    CONSTRAINT fk_order_item_c_orders FOREIGN KEY (order_id)
+        REFERENCES orders_c (order_id),
+    CONSTRAINT fk_order_item_c_product FOREIGN KEY (product_id)
+        REFERENCES product_c (product_id)
+);
+
+-- 샘플 데이터 삽입
+INSERT INTO product_c (product_id, name, price) VALUES (101, '노트북', 1500000);
+INSERT INTO product_c (product_id, name, price) VALUES (102, '마우스', 20000);
+INSERT INTO orders_c (order_id) VALUES (1);
+
+-- 1번 주문에 101번 상품 2개 추가
+INSERT INTO order_item_c (order_id, product_id, order_price, count)
+VALUES (1, 101, 1500000, 2);
+
+-- 1번 주문에 102번 상품 1개 추가
+INSERT INTO order_item_c (order_id, product_id, order_price, count)
+VALUES (1, 102, 20000, 1);
+
+-- (실패) 1번 주문에 101번 상품을 또 추가하려고 시도
+-- INSERT INTO order_item_c (order_id, product_id, order_price, count)
+-- VALUES (1, 101, 1500000, 3);
+
+SELECT * FROM order_item_c;
+
+
+-- 테이블 초기화
+DROP TABLE IF EXISTS order_item_s;
+DROP TABLE IF EXISTS orders_s;
+DROP TABLE IF EXISTS product_s;
+
+-- 상품 테이블 생성
+CREATE TABLE product_s (
+    product_id   BIGINT       NOT NULL AUTO_INCREMENT,
+    name         VARCHAR(100) NOT NULL,
+    price        INT          NOT NULL,
+    PRIMARY KEY (product_id)
+);
+
+-- 주문 테이블 생성
+CREATE TABLE orders_s (
+    order_id   BIGINT   NOT NULL AUTO_INCREMENT,
+    ordered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (order_id)
+);
+
+-- 주문 항목 테이블 생성 (대리 키 + UNIQUE 제약조건 사용)
+CREATE TABLE order_item_s (
+    order_item_id BIGINT NOT NULL AUTO_INCREMENT, -- 주문 상품 ID (PK)
+    order_id      BIGINT NOT NULL,                -- 주문 ID (FK)
+    product_id    BIGINT NOT NULL,                -- 상품 ID (FK)
+    order_price   INT    NOT NULL,                -- 주문 당시 가격
+    count         INT    NOT NULL,                -- 주문 수량
+    PRIMARY KEY (order_item_id),
+    CONSTRAINT fk_order_item_s_orders FOREIGN KEY (order_id)
+        REFERENCES orders_s (order_id),
+    CONSTRAINT fk_order_item_s_product FOREIGN KEY (product_id)
+        REFERENCES product_s (product_id),
+    UNIQUE KEY uq_order_product (order_id, product_id) -- 복합 UNIQUE 제약
+);
+
+-- 샘플 데이터 삽입 (예시를 위해 ID 직접 지정)
+INSERT INTO product_s (product_id, name, price) VALUES (101, '노트북', 1500000);
+INSERT INTO product_s (product_id, name, price) VALUES (102, '마우스', 20000);
+INSERT INTO orders_s (order_id) VALUES (1);
+
+-- 1번 주문에 101번 상품 2개 추가
+INSERT INTO order_item_s (order_id, product_id, order_price, count)
+VALUES (1, 101, 1500000, 2);
+
+-- 1번 주문에 102번 상품 1개 추가
+INSERT INTO order_item_s (order_id, product_id, order_price, count)
+VALUES (1, 102, 20000, 1);
+
+-- (실패) 1번 주문에 101번 상품을 중복 추가 시도
+-- INSERT INTO order_item_s (order_id, product_id, order_price, count)
+-- VALUES (1, 101, 1500000, 3);
+
+
+SELECT * FROM order_item_s;
+
+
+
+----------------------------
+-- # 6. 논리적 모델링2 - 참여도와 일대다 관계
+----------------------------
+
+-- ## 논리적 모델링 - 관계
+
+DROP TABLE IF EXISTS member_detail; -- 다른 예제에서 발생
+DROP TABLE IF EXISTS member;
+DROP TABLE IF EXISTS team;
+
+-- 팀 테이블 생성
+CREATE TABLE team (
+    team_id BIGINT NOT NULL AUTO_INCREMENT,
+    name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (team_id)
+);
+
+-- 회원 테이블 생성
+CREATE TABLE member (
+    member_id BIGINT NOT NULL AUTO_INCREMENT,
+    team_id BIGINT NULL, -- 회원은 팀에 소속되지 않을 수도 있다 (NULL 허용)
+    name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (member_id),
+    CONSTRAINT fk_member_team FOREIGN KEY (team_id)
+        REFERENCES team (team_id)
+);
+
+-- 샘플 데이터 추가
+INSERT INTO team(name) VALUES ('개발팀'), ('기획팀');
+INSERT INTO member(name, team_id) VALUES ('션', 1), ('잡스', 1), ('네이트', 2);
+
+
+SELECT
+    m.name AS member_name,
+    t.name AS team_name
+FROM member m
+JOIN team t ON m.team_id = t.team_id
+WHERE m.name = '잡스';
+
+
+SELECT
+    t.name AS team_name,
+    m.name AS member_name
+FROM team t
+JOIN member m ON t.team_id = m.team_id
+WHERE t.name = '개발팀';
+
+
+-- ## 참여도
+
+DROP TABLE IF EXISTS member;
+DROP TABLE IF EXISTS team;
+
+CREATE TABLE team (
+    team_id   BIGINT       NOT NULL AUTO_INCREMENT,
+    name      VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (team_id)
+);
+
+CREATE TABLE member (
+    member_id   BIGINT       NOT NULL AUTO_INCREMENT,
+    team_id     BIGINT       NULL, -- NULL 허용으로 선택적 참여 구현
+    name        VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (member_id),
+    CONSTRAINT fk_member_team FOREIGN KEY (team_id)
+        REFERENCES team (team_id)
+);
+
+INSERT INTO member(name, team_id) VALUES ('이기획', NULL);
+
+SELECT * FROM member;
+
+
+DROP TABLE IF EXISTS member;
+
+CREATE TABLE member (
+    member_id   BIGINT       NOT NULL AUTO_INCREMENT,
+    team_id     BIGINT       NOT NULL, -- NOT NULL로 필수적 참여 구현
+    name        VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (member_id),
+    CONSTRAINT fk_member_team FOREIGN KEY (team_id)
+        REFERENCES team (team_id)
+);
+
+INSERT INTO member(name, team_id) VALUES ('이기획', NULL);
+
+
+-- ## 일대다(1:N) 다대일(N:1) 관계 - 외래 키 위치1
+
+DROP TABLE IF EXISTS team_bad1;
+CREATE TABLE team_bad1 (
+    team_id BIGINT NOT NULL,
+    name VARCHAR(50) NOT NULL,
+    member_id BIGINT NULL,
+    PRIMARY KEY (team_id)
+);
+
+-- 데이터 삽입
+INSERT INTO team_bad1(team_id, name, member_id) VALUES (1, '개발팀', 1); -- 김개발(ID:1)
+
+-- 오류 발생
+INSERT INTO team_bad1(team_id, name, member_id) VALUES (1, '개발팀', 2); -- 박개발(ID:2)
+
+
+DROP TABLE IF EXISTS team_bad2;
+CREATE TABLE team_bad2 (
+    team_id BIGINT NOT NULL,
+    name VARCHAR(50) NOT NULL,
+    member_ids VARCHAR(255) NULL, -- 쉼표로 구분된 회원 ID 목록
+    PRIMARY KEY (team_id)
+);
+
+-- 데이터 삽입
+INSERT INTO team_bad2(team_id, name, member_ids) VALUES (1, '개발팀', '1,2');
+
+
+DROP TABLE IF EXISTS team_bad3;
+CREATE TABLE team_bad3 (
+    team_id BIGINT NOT NULL AUTO_INCREMENT,
+    name VARCHAR(50) NOT NULL,
+    member_id_1 BIGINT NULL, -- 첫 번째 팀원
+    member_id_2 BIGINT NULL, -- 두 번째 팀원
+    member_id_3 BIGINT NULL, -- 세 번째 팀원 ... 언제까지 추가할 것인가?
+    PRIMARY KEY (team_id)
+);
+
+-- 데이터 삽입
+INSERT INTO team_bad3(name, member_id_1, member_id_2)
+VALUES ('개발팀', 1, 2); -- 김개발(ID:1), 박개발(ID:2);
+
+
+SELECT name FROM team_bad3
+WHERE member_id_1 = 2 OR member_id_2 = 2 OR member_id_3 = 2;
+
+
+DROP TABLE IF EXISTS member;
+DROP TABLE IF EXISTS team;
+
+CREATE TABLE team (
+    team_id   BIGINT       NOT NULL AUTO_INCREMENT,
+    name      VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (team_id),
+    UNIQUE KEY uq_name (name)
+);
+
+
+DROP TABLE IF EXISTS member;
+
+CREATE TABLE member (
+    member_id   BIGINT       NOT NULL AUTO_INCREMENT,
+    team_id     BIGINT       NULL, -- 팀에 소속되지 않은 회원이 있을 수 있다면 NULL 허용
+    name        VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (member_id),
+    CONSTRAINT fk_member_team FOREIGN KEY (team_id)
+        REFERENCES team (team_id)
+);
+
+
+-- 팀 데이터 삽입
+INSERT INTO team(name) VALUES ('개발팀'), ('디자인팀');
+
+-- 김개발, 박개발 -> 개발팀 (team_id=1)
+INSERT INTO member(team_id, name)
+VALUES (1, '김개발'),
+       (1, '박개발');
+
+-- 최디자인 -> 디자인팀 (team_id=2)
+INSERT INTO member(team_id, name)
+VALUES (2, '최디자인');
+
+-- 이기획 -> 팀 없음 (team_id=NULL)
+INSERT INTO member(team_id, name)
+VALUES (NULL, '이기획');
+
+
+SELECT * FROM team;
+SELECT * FROM member;
+
+
+
+-- ## 일대다(1:N) 다대일(N:1) 관계 - 조인과 뻥튀기
+
+SELECT
+    m.name AS member_name,
+    t.name AS team_name
+FROM
+    member m
+LEFT JOIN
+    team t ON m.team_id = t.team_id;
+
+
+SELECT * FROM team;
+
+
+SELECT
+    t.name AS team_name,
+    m.name AS member_name
+FROM
+    team t
+JOIN
+    member m ON t.team_id = m.team_id;
+
+
+
+----------------------------
+-- # 7. 논리적 모델링3 - 일대일, 다대다 관계
+----------------------------
+
+-- ## 일대일(1:1) 관계 - 시작
+
+DROP TABLE IF EXISTS member_detail;
+DROP TABLE IF EXISTS member;
+
+CREATE TABLE member (
+    member_id  BIGINT       NOT NULL AUTO_INCREMENT,
+    name       VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (member_id)
+);
+
+CREATE TABLE member_detail (
+    member_detail_id  BIGINT       NOT NULL AUTO_INCREMENT, -- 회원 상세 ID (PK)
+    member_id         BIGINT       NOT NULL,                 -- 회원 ID (FK)
+    bio               TEXT         NULL,                     -- 자기소개
+    website_url       VARCHAR(255) NULL,                     -- 개인 홈페이지
+    mbti              VARCHAR(10)  NULL,                     -- MBTI
+    PRIMARY KEY (member_detail_id),
+    CONSTRAINT fk_detail_member FOREIGN KEY (member_id)
+        REFERENCES member (member_id)
+);
+
+
+-- 테스트 회원 추가
+INSERT INTO member (name) VALUES ('김개발');
+
+-- '김개발' 회원의 상세 정보 추가 (member_id = 1)
+INSERT INTO member_detail (member_id, bio, mbti)
+VALUES (1, '안녕하세요, 최고의 개발자가 되고 싶습니다.', 'INTJ');
+
+
+SELECT * FROM member;
+
+SELECT * FROM member_detail;
+
+SELECT m.member_id, m.name, d.bio, d.mbti
+FROM member m
+JOIN member_detail d ON m.member_id = d.member_id;
+
+
+-- '김개발' 회원의 상세 정보 또 추가
+INSERT INTO member_detail (member_id, bio, mbti)
+VALUES (1, '취미는 코딩입니다.', 'ENTP');
+
+SELECT * FROM member_detail WHERE member_id = 1;
+
+
+-- 기존 테이블 삭제
+DROP TABLE IF EXISTS member_detail;
+
+-- UNIQUE 제약조건을 추가하여 재생성
+CREATE TABLE member_detail (
+    member_detail_id  BIGINT       NOT NULL AUTO_INCREMENT, -- 회원 상세 ID (PK)
+    member_id         BIGINT       NOT NULL,                 -- 회원 ID (FK, UNIQUE)
+    bio               TEXT         NULL,                     -- 자기소개
+    website_url       VARCHAR(255) NULL,                     -- 개인 홈페이지
+    mbti              VARCHAR(10)  NULL,                     -- MBTI
+    PRIMARY KEY (member_detail_id),
+    UNIQUE KEY uq_member_id (member_id), -- 이 부분이 핵심!
+    CONSTRAINT fk_detail_member FOREIGN KEY (member_id)
+        REFERENCES member (member_id)
+);
+
+
+-- '김개발' 회원의 첫 번째 상세 정보 추가 (성공)
+INSERT INTO member_detail (member_id, bio, mbti)
+VALUES (1, '안녕하세요, 최고의 개발자가 되고 싶습니다.', 'INTJ');
+
+-- '김개발' 회원의 두 번째 상세 정보 추가 (실패)
+INSERT INTO member_detail (member_id, bio, mbti)
+VALUES (1, '취미는 코딩입니다.', 'ENTP');
+
+
+-- 상세 정보가 필요할 때만 JOIN
+SELECT m.name, d.bio, d.mbti
+FROM member m
+JOIN member_detail d ON m.member_id = d.member_id
+WHERE m.member_id = 1;
+
+
+
+-- ## 일대일(1:1) 관계 - 외래 키 위치
+
+DROP TABLE IF EXISTS member_detail;
+DROP TABLE IF EXISTS member;
+
+-- 주 테이블
+CREATE TABLE member (
+    member_id  BIGINT       NOT NULL AUTO_INCREMENT,
+    name       VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (member_id)
+);
+
+-- 보조 테이블
+CREATE TABLE member_detail (
+    member_detail_id  BIGINT       NOT NULL AUTO_INCREMENT, -- 고유 PK
+    member_id         BIGINT       NOT NULL,              -- FK + UNIQUE
+    bio               TEXT         NULL,
+    mbti              VARCHAR(10)  NULL,
+    PRIMARY KEY (member_detail_id),
+    UNIQUE KEY uq_member_id (member_id), -- 1:1 관계의 핵심
+    CONSTRAINT fk_detail_member FOREIGN KEY (member_id)
+        REFERENCES member (member_id)
+);
+
+
+-- 1. 주 테이블에 데이터 추가
+INSERT INTO member(name) VALUES ('김개발'); -- member_id = 1 가정
+
+-- 2. 보조 테이블에 데이터 추가
+INSERT INTO member_detail(member_id, bio, mbti)
+VALUES (1, '항상 성장하는 개발자입니다.', 'INTJ');
+
+
+DROP TABLE IF EXISTS member_detail; -- member를 참조한다. 먼저 제거
+DROP TABLE IF EXISTS member;
+
+DROP TABLE IF EXISTS member; -- member_detail을 참조한다. 먼저 제거
+DROP TABLE IF EXISTS member_detail;
+
+-- 보조 테이블 (먼저 생성)
+CREATE TABLE member_detail (
+    member_detail_id  BIGINT       NOT NULL AUTO_INCREMENT,
+    bio               TEXT         NULL,
+    mbti              VARCHAR(10)  NULL,
+    PRIMARY KEY (member_detail_id)
+);
+
+-- 주 테이블
+CREATE TABLE member (
+    member_id         BIGINT       NOT NULL AUTO_INCREMENT,
+    member_detail_id  BIGINT       NULL, -- FK이자 UNIQUE, NULL 허용
+    name              VARCHAR(50)  NOT NULL,
+    PRIMARY KEY (member_id),
+    UNIQUE KEY uq_member_detail_id (member_detail_id), -- 1:1 관계의 핵심
+    CONSTRAINT fk_member_detail FOREIGN KEY (member_detail_id)
+        REFERENCES member_detail (member_detail_id)
+);
+
+-- 1. 주 테이블에 데이터 추가 (보조 테이블 NULL)
+INSERT INTO member(name, member_detail_id)
+VALUES ('김개발', NULL);
+
+-- 2. 보조 테이블에 먼저 데이터 추가
+INSERT INTO member_detail(bio, mbti)
+VALUES ('항상 성장하는 개발자입니다.', 'INTJ');
+
+-- 3. 주 테이블에 보조 테이블 정보 등록
+UPDATE member
+   SET member_detail_id = 1 -- 1이라고 가정
+ WHERE member_id = 1; -- 1이라고 가정
+
+
+-- 1. 보조 테이블에 먼저 데이터 추가
+INSERT INTO member_detail(bio, mbti)
+VALUES ('기획은 나의 길, 기획자 입니다.', 'ENTJ');
+
+-- 2. 주 테이블에 해당 ID를 넣어서 데이터 추가
+INSERT INTO member(name, member_detail_id)
+VALUES ('서기획', 2); -- member_detail_id: 2라고 가정
+
+
+
+-- ## 일대일(1:1) 관계 - [실습] 관계 확장의 유연성
+
+DROP TABLE IF EXISTS upload_file;
+DROP TABLE IF EXISTS board;
+
+-- 게시글 테이블
+CREATE TABLE board (
+    board_id BIGINT NOT NULL AUTO_INCREMENT,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NULL,
+    PRIMARY KEY (board_id)
+);
+
+CREATE TABLE upload_file (
+    upload_file_id   BIGINT        NOT NULL AUTO_INCREMENT,
+    board_id  BIGINT        NOT NULL,
+    upload_file_name VARCHAR(255)  NOT NULL,
+    PRIMARY KEY (upload_file_id),
+    UNIQUE KEY uq_board_id (board_id), -- 이 제약조건으로 1:1 관계를 보장
+    CONSTRAINT fk_upload_file_board FOREIGN KEY (board_id) REFERENCES board(board_id)
+);
+
+desc upload_file;
+
+
+INSERT INTO board(title, content) VALUES ('1:1 관계 테스트', '하나의 파일만 첨부됩니다.');
+
+INSERT INTO upload_file(board_id, upload_file_name) VALUES (1, 'document.pdf');
+
+INSERT INTO upload_file(board_id, upload_file_name) VALUES (1, 'image.jpg');
+
+
+SELECT
+    b.board_id,
+    b.title,
+    f.upload_file_id,
+    f.upload_file_name
+FROM board b
+JOIN upload_file f ON b.board_id = f.board_id
+ORDER BY f.upload_file_id;
+
+
+-- 1단계: 외래 키(Foreign Key) 제약조건 삭제 (MySQL에서는 인덱스 변경 전 FK를 먼저 삭제해야 한다)
+ALTER TABLE upload_file DROP FOREIGN KEY fk_upload_file_board;
+
+-- 2단계: 기존 UNIQUE 인덱스 삭제
+ALTER TABLE upload_file DROP INDEX uq_board_id;
+
+-- 3단계: 외래 키 제약조건 다시 추가 (유니크 인덱스 -> 일반 인덱스)
+ALTER TABLE upload_file ADD CONSTRAINT fk_upload_file_board FOREIGN KEY (board_id)
+REFERENCES board (board_id);
+
+
+desc upload_file;
+
+
+INSERT INTO upload_file(board_id, upload_file_name) VALUES (1, 'image.jpg');
+INSERT INTO upload_file(board_id, upload_file_name) VALUES (1, 'data.csv');
+
+SELECT
+    b.board_id,
+    b.title,
+    f.upload_file_id,
+    f.upload_file_name
+FROM board b
+JOIN upload_file f ON b.board_id = f.board_id
+ORDER BY f.upload_file_id;
+
+
+-- ## 일대일(1:1) 관계 - 주 테이블에 FK
+
+DROP TABLE IF EXISTS member;
+DROP TABLE IF EXISTS member_detail;
+
+-- 보조 테이블 (먼저 생성)
+CREATE TABLE member_detail (
+    member_detail_id BIGINT NOT NULL AUTO_INCREMENT,
+    bio TEXT NULL,
+    mbti VARCHAR(10) NULL,
+    PRIMARY KEY (member_detail_id)
+);
+
+-- 주 테이블
+CREATE TABLE member (
+    member_id        BIGINT NOT NULL AUTO_INCREMENT,
+    member_detail_id BIGINT NOT NULL, -- NOT NULL 제약조건이 핵심
+    name             VARCHAR(50) NOT NULL,
+    PRIMARY KEY (member_id),
+    UNIQUE KEY uq_member_detail_id (member_detail_id),
+    CONSTRAINT fk_member_detail FOREIGN KEY (member_detail_id)
+        REFERENCES member_detail (member_detail_id)
+);
+
+
+INSERT INTO member (member_detail_id, name) VALUES (NULL, '네이트');
+
+-- 존재하지 않는 member_detail_id(100)를 사용
+INSERT INTO member (member_detail_id, name) VALUES (100, '네이트');
+
+
+-- 1. '네이트'의 상세 정보 추가
+INSERT INTO member_detail (bio, mbti) VALUES ('안녕하세요. 백엔드 개발자입니다.', 'INFJ');
+
+-- 2. '네이트'의 회원 정보 추가 (방금 생성된 member_detail_id는 1)
+INSERT INTO member (member_detail_id, name) VALUES (1, '네이트');
+
+-- 3. '션'의 상세 정보 추가
+INSERT INTO member_detail (bio, mbti) VALUES ('풀스택 개발자를 꿈꿉니다.', 'ENFP');
+
+-- 4. '션'의 회원 정보 추가 (방금 생성된 member_detail_id는 2)
+INSERT INTO member (member_detail_id, name) VALUES (2, '션');
+
+
+SELECT
+    m.member_id,
+    m.name,
+    md.bio,
+    md.mbti
+FROM
+    member m
+JOIN
+    member_detail md ON m.member_detail_id = md.member_detail_id;
+
+
+-- ## 다대다(M:N) 관계 - 연결 테이블
+
+DROP TABLE IF EXISTS order_item; -- 다른 예제 충돌 예방
+DROP TABLE IF EXISTS order_product;
+DROP TABLE IF EXISTS product;
+DROP TABLE IF EXISTS orders;
+
+-- 상품 테이블 생성
+CREATE TABLE product (
+    product_id  BIGINT          NOT NULL, -- 상품id 직접 입력
+    name        VARCHAR(100)    NOT NULL,
+    price       INT             NOT NULL,
+    PRIMARY KEY (product_id)
+);
+
+-- 주문 테이블 생성
+CREATE TABLE orders (
+    order_id    BIGINT NOT NULL, -- 주문id 직접 입력
+    order_date  DATE,
+    PRIMARY KEY (order_id)
+);
+
+-- 연결 테이블(주문-상품) 생성
+CREATE TABLE order_product (
+    order_product_id    BIGINT  NOT NULL AUTO_INCREMENT,
+    order_id            BIGINT  NOT NULL, -- orders 테이블의 FK
+    product_id          BIGINT  NOT NULL, -- product 테이블의 FK
+
+    PRIMARY KEY (order_product_id),
+
+    -- 한 주문에 동일한 상품이 중복으로 들어가는 것을 방지
+    CONSTRAINT uq_order_product UNIQUE (order_id, product_id),
+    CONSTRAINT fk_order_product_orders FOREIGN KEY (order_id)
+        REFERENCES orders (order_id),
+    CONSTRAINT fk_order_product_product FOREIGN KEY (product_id)
+        REFERENCES product (product_id)
+);
+
+
+-- 상품 데이터 삽입
+INSERT INTO product(product_id, name, price) VALUES(1, '청바지', 50000);
+INSERT INTO product(product_id, name, price) VALUES(2, '티셔츠', 25000);
+
+-- 주문 100 생성
+INSERT INTO orders(order_id, order_date) VALUES(100, '2025-09-01');
+
+-- 연결 테이블 데이터 삽입
+-- 주문 100에 대한 상품 정보
+INSERT INTO order_product(order_id, product_id) VALUES(100, 1); -- 주문 100번, 청바지
+INSERT INTO order_product(order_id, product_id) VALUES(100, 2); -- 주문 100번, 티셔츠
+
+-- 주문 101 생성
+INSERT INTO orders(order_id, order_date) VALUES(101, '2025-09-02');
+-- 주문 101에 대한 상품 정보
+INSERT INTO order_product(order_id, product_id) VALUES(101, 1); -- 주문 101번, 청바지 1개
+
+
+SELECT * FROM product;
+SELECT * FROM orders;
+SELECT * FROM order_product;
+
+
+SELECT
+    o.order_id,
+    p.name,
+    p.price
+FROM orders o
+JOIN order_product op ON o.order_id = op.order_id
+JOIN product p ON op.product_id = p.product_id
+WHERE o.order_id = 100;
+
+
+SELECT
+    p.name,
+    o.order_id,
+    o.order_date
+FROM product p
+JOIN order_product op ON p.product_id = op.product_id
+JOIN orders o ON op.order_id = o.order_id
+WHERE p.product_id = 1;
+
+
+-- ## 다대다(M:N) 관계 - 속성
+
+DROP TABLE IF EXISTS order_item;
+
+CREATE TABLE order_item (
+    order_item_id  BIGINT   NOT NULL AUTO_INCREMENT, -- 주문 상품 ID (PK)
+    order_id       BIGINT   NOT NULL,        -- 주문 ID (FK from orders)
+    product_id     BIGINT   NOT NULL,        -- 상품 ID (FK from product)
+    order_price    INT      NOT NULL,        -- 주문 당시 가격 (관계 속성)
+    order_quantity INT      NOT NULL,        -- 주문 수량 (관계 속성)
+
+    PRIMARY KEY (order_item_id),
+
+    -- 한 주문에 동일한 상품이 중복으로 들어가는 것을 방지
+    CONSTRAINT uq_order_item UNIQUE (order_id, product_id),
+    CONSTRAINT fk_order_item_orders FOREIGN KEY (order_id)
+      REFERENCES orders (order_id),
+    CONSTRAINT fk_order_item_product FOREIGN KEY (product_id)
+      REFERENCES product (product_id)
+);
+
+
+
+
+----------------------------------------
+-- # 8. 논리적 모델링4 - 식별 관계, 비식별 관계
+----------------------------------------
+
+
+-- ## 식별 관계 vs 비식별 관계 - 일대다(1:N)
+
+DROP TABLE IF EXISTS comment_non_identifying;
+DROP TABLE IF EXISTS board_non_identifying;
+
+CREATE TABLE board_non_identifying (
+    board_id BIGINT NOT NULL AUTO_INCREMENT,
+    title VARCHAR(255) NOT NULL,
+    PRIMARY KEY (board_id)
+);
+
+CREATE TABLE comment_non_identifying (
+    comment_id BIGINT NOT NULL AUTO_INCREMENT, -- 독립적인 PK
+    board_id BIGINT NOT NULL, -- 일반 컬럼 + FK
+    content TEXT NOT NULL,
+    PRIMARY KEY (comment_id),
+    CONSTRAINT fk_comment_board_non FOREIGN KEY (board_id)
+        REFERENCES board_non_identifying (board_id)
+);
+
+-- 데이터 입력
+INSERT INTO board_non_identifying (title) VALUES ('첫 번째 게시글'); -- board_id: 1
+INSERT INTO board_non_identifying (title) VALUES ('두 번째 게시글'); -- board_id: 2
+
+INSERT INTO comment_non_identifying (board_id, content) VALUES (1, '1번 글의 첫 댓글입니다.');  -- comment_id: 1
+INSERT INTO comment_non_identifying (board_id, content) VALUES (1, '1번 글의 두 번째 댓글입니다.'); -- comment_id: 2
+INSERT INTO comment_non_identifying (board_id, content) VALUES (2, '2번 글의 첫 댓글입니다.');  -- comment_id: 3
+
+
+DROP TABLE IF EXISTS comment_identifying;
+DROP TABLE IF EXISTS board_identifying;
+
+CREATE TABLE board_identifying (
+    board_id BIGINT NOT NULL AUTO_INCREMENT,
+    title VARCHAR(255) NOT NULL,
+    PRIMARY KEY (board_id)
+);
+
+CREATE TABLE comment_identifying (
+    board_id BIGINT NOT NULL, -- PK의 일부 + FK
+    comment_no BIGINT NOT NULL, -- PK의 일부, 해당 board_id 내에서 순차 증가
+    content TEXT NOT NULL,
+    PRIMARY KEY (board_id, comment_no), -- 복합 기본 키 (Composite PK)
+    CONSTRAINT fk_comment_board_iden FOREIGN KEY (board_id)
+        REFERENCES board_identifying (board_id)
+);
+
+
+-- 데이터 입력
+INSERT INTO board_identifying (title) VALUES ('첫 번째 게시글'); -- board_id: 1
+INSERT INTO board_identifying (title) VALUES ('두 번째 게시글'); -- board_id: 2
+
+-- 애플리케이션 레벨에서 comment_no를 계산해서 넣어주어야 한다.
+INSERT INTO comment_identifying (board_id, comment_no, content) VALUES (1, 1, '1번 글의 첫 댓글입니다.');
+INSERT INTO comment_identifying (board_id, comment_no, content) VALUES (1, 2, '1번 글의 두 번째 댓글입니다.');
+INSERT INTO comment_identifying (board_id, comment_no, content) VALUES (2, 1, '2번 글의 첫 댓글입니다.');
+
+
+-- ## 식별 관계의 문제점
+
+DROP TABLE IF EXISTS reply_identifying;
+DROP TABLE IF EXISTS comment_identifying;
+DROP TABLE IF EXISTS board_identifying;
+
+CREATE TABLE board_identifying (
+    board_id BIGINT NOT NULL AUTO_INCREMENT,
+    title VARCHAR(255) NOT NULL,
+    PRIMARY KEY (board_id)
+);
+
+CREATE TABLE comment_identifying (
+    board_id BIGINT NOT NULL, -- 부모 PK를 상속 (PK + FK)
+    comment_no BIGINT NOT NULL, -- 해당 board_id 내에서의 고유 번호
+    content TEXT NOT NULL,
+    PRIMARY KEY (board_id, comment_no), -- 복합키
+    CONSTRAINT fk_comment_to_board FOREIGN KEY (board_id)
+        REFERENCES board_identifying(board_id)
+);
+
+CREATE TABLE reply_identifying (
+    board_id BIGINT NOT NULL, -- 조상 PK를 상속 (PK + FK)
+    comment_no BIGINT NOT NULL, -- 부모 PK를 상속 (PK + FK)
+    reply_no BIGINT NOT NULL, -- 해당 comment_no 내에서의 고유 번호
+    content TEXT NOT NULL,
+    PRIMARY KEY (board_id, comment_no, reply_no), -- 더 길어진 복합키
+    CONSTRAINT fk_reply_to_comment FOREIGN KEY (board_id, comment_no)
+        REFERENCES comment_identifying (board_id, comment_no)
+);
+
+
+SELECT * FROM reply_identifying
+WHERE board_id = 1 AND comment_no = 10 AND reply_no = 3;
+
+
+DROP TABLE IF EXISTS reply_non_identifying;
+
+CREATE TABLE reply_non_identifying (
+    reply_id BIGINT NOT NULL AUTO_INCREMENT, -- 독립적인 PK
+    comment_id BIGINT NOT NULL,              -- 부모를 참조하는 FK
+    content TEXT NOT NULL,
+    PRIMARY KEY (reply_id),
+    CONSTRAINT fk_reply_comment_non FOREIGN KEY (comment_id)
+        REFERENCES comment_non_identifying(comment_id)
+);
+
+
+-- ## 식별 관계 vs 비식별 관계 - SQL 쿼리, 성능
+
+-- comment_id가 500번인 댓글 조회
+SELECT content FROM comment_non_identifying WHERE comment_id = 500;
+
+-- 10번 게시글의 3번째 댓글 조회
+SELECT content FROM comment_identifying WHERE board_id = 10 AND comment_no = 3;
+
+
+-- ## 식별 관계 vs 비식별 관계 - 일대일(1:1)
+
+DROP TABLE IF EXISTS member_detail_non_identifying;
+DROP TABLE IF EXISTS member_non_identifying;
+
+CREATE TABLE member_non_identifying (
+    member_id BIGINT NOT NULL AUTO_INCREMENT,
+    name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (member_id)
+);
+
+CREATE TABLE member_detail_non_identifying (
+    member_detail_id BIGINT NOT NULL AUTO_INCREMENT, -- 독립적인 PK
+    member_id BIGINT NOT NULL, -- 일반 컬럼 + FK + UNIQUE
+    bio TEXT NULL,
+    PRIMARY KEY (member_detail_id),
+    UNIQUE KEY uq_member_id (member_id),
+    CONSTRAINT fk_detail_member_non FOREIGN KEY (member_id)
+        REFERENCES member_non_identifying (member_id)
+);
+
+-- 1. 회원 데이터 입력
+INSERT INTO member_non_identifying (name) VALUES ('kim'); -- member_id = 1 생성
+INSERT INTO member_non_identifying (name) VALUES ('park'); -- member_id = 2 생성
+
+-- 2. 'kim' 회원의 상세 정보 입력
+-- member_id = 1을 참조하여 상세 정보를 추가한다.
+INSERT INTO member_detail_non_identifying (member_id, bio)
+VALUES (1, '데이터베이스 전문가입니다.'); -- member_detail_id = 1 생성
+
+
+SELECT
+    m.member_id,
+    m.name,
+    md.bio
+FROM
+    member_non_identifying m
+LEFT JOIN
+    member_detail_non_identifying md ON m.member_id = md.member_id;
+
+
+DROP TABLE IF EXISTS member_detail_identifying;
+DROP TABLE IF EXISTS member_identifying;
+
+CREATE TABLE member_identifying (
+    member_id BIGINT NOT NULL AUTO_INCREMENT,
+    name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (member_id)
+);
+
+CREATE TABLE member_detail_identifying (
+    member_id BIGINT NOT NULL, -- PK + FK
+    bio TEXT NULL,
+    PRIMARY KEY (member_id),
+    CONSTRAINT fk_detail_member_iden FOREIGN KEY (member_id)
+        REFERENCES member_identifying (member_id)
+);
+
+
+-- 1. 회원 데이터 입력
+INSERT INTO member_identifying (name) VALUES ('kim'); -- member_id = 1 생성
+INSERT INTO member_identifying (name) VALUES ('park'); -- member_id = 2 생성
+
+-- 2. 'kim' 회원의 상세 정보 입력
+-- member_id = 1을 PK이자 FK로 사용하여 상세 정보를 추가한다.
+INSERT INTO member_detail_identifying (member_id, bio)
+VALUES (1, '데이터베이스 전문가입니다.');
+
+
+SELECT
+    m.member_id,
+    m.name,
+    md.bio
+FROM
+    member_identifying m
+LEFT JOIN
+    member_detail_identifying md ON m.member_id = md.member_id;
+
+
+
+-- ## 식별 관계 vs 비식별 관계 - 다대다(M:N) 1
+
+DROP TABLE IF EXISTS order_item_identifying;
+DROP TABLE IF EXISTS product_identifying;
+DROP TABLE IF EXISTS orders_identifying;
+
+-- 상품 테이블 생성
+CREATE TABLE product_identifying (
+    product_id  BIGINT          NOT NULL, -- 상품id 직접 입력
+    name        VARCHAR(100)    NOT NULL,
+    price       INT             NOT NULL,
+    PRIMARY KEY (product_id)
+);
+
+-- 주문 테이블 생성
+CREATE TABLE orders_identifying (
+    order_id    BIGINT NOT NULL, -- 주문id 직접 입력
+    order_date  DATE,
+    PRIMARY KEY (order_id)
+);
+
+CREATE TABLE order_item_identifying (
+    order_id   BIGINT NOT NULL, -- PK의 일부 + FK
+    product_id BIGINT NOT NULL, -- PK의 일부 + FK
+    order_price INT    NOT NULL,
+    order_quantity       INT    NOT NULL,
+    PRIMARY KEY (order_id, product_id), -- 복합 기본 키
+    CONSTRAINT fk_oi_iden_orders FOREIGN KEY (order_id) REFERENCES orders_identifying (order_id),
+    CONSTRAINT fk_oi_iden_product FOREIGN KEY (product_id) REFERENCES product_identifying (product_id)
+);
+
+
+-- 상품 데이터 삽입
+INSERT INTO product_identifying(product_id, name, price) VALUES(1, '청바지', 50000);
+INSERT INTO product_identifying(product_id, name, price) VALUES(2, '티셔츠', 25000);
+
+-- 주문 100 생성
+INSERT INTO orders_identifying(order_id, order_date) VALUES(100, '2025-09-01');
+
+-- 100번 주문에 1번 상품(청바지) 추가
+INSERT INTO order_item_identifying(order_id, product_id, order_price, order_quantity)
+VALUES (100, 1, 30000, 1);
+
+-- 100번 주문에 2번 상품(티셔츠) 추가
+INSERT INTO order_item_identifying(order_id, product_id, order_price, order_quantity)
+VALUES (100, 2, 15000, 2);
+
+
+-- 100번 주문에 1번 상품(청바지)을 중복 추가 시도
+INSERT INTO order_item_identifying(order_id, product_id, order_price, order_quantity)
+VALUES (100, 1, 30000, 5); -- 수량을 5개로 다시 주문 시도
+
+
+
+DROP TABLE IF EXISTS order_item_non_identifying;
+DROP TABLE IF EXISTS product_non_identifying;
+DROP TABLE IF EXISTS orders_non_identifying;
+
+-- 상품 테이블 생성
+CREATE TABLE product_non_identifying (
+    product_id  BIGINT          NOT NULL, -- 상품id 직접 입력
+    name        VARCHAR(100)    NOT NULL,
+    price       INT             NOT NULL,
+    PRIMARY KEY (product_id)
+);
+
+-- 주문 테이블 생성
+CREATE TABLE orders_non_identifying (
+    order_id    BIGINT NOT NULL, -- 주문id 직접 입력
+    order_date  DATE,
+    PRIMARY KEY (order_id)
+);
+
+CREATE TABLE order_item_non_identifying (
+    order_item_id BIGINT NOT NULL AUTO_INCREMENT, -- 독립적인 PK
+    order_id BIGINT NOT NULL, -- 일반 컬럼 + FK
+    product_id BIGINT NOT NULL, -- 일반 컬럼 + FK
+    order_price INT NOT NULL,
+    order_quantity INT NOT NULL,
+    PRIMARY KEY (order_item_id),
+    CONSTRAINT fk_oi_non_orders FOREIGN KEY (order_id) 
+        REFERENCES orders_non_identifying(order_id),
+    CONSTRAINT fk_oi_non_product FOREIGN KEY (product_id)
+        REFERENCES product_non_identifying(product_id)
+);
+
+
+-- 상품 데이터 삽입
+INSERT INTO product_non_identifying(product_id, name, price) VALUES(1, '청바지', 50000);
+INSERT INTO product_non_identifying(product_id, name, price) VALUES(2, '티셔츠', 25000);
+
+-- 주문 100 생성
+INSERT INTO orders_non_identifying(order_id, order_date) VALUES(100, '2025-09-01');
+
+-- 100번 주문에 1번 상품(청바지) 추가
+INSERT INTO order_item_non_identifying(order_id, product_id, order_price, order_quantity)
+VALUES (100, 1, 30000, 1);
+
+-- 실수로 동일한 상품을 한 번 더 추가
+INSERT INTO order_item_non_identifying(order_id, product_id, order_price, order_quantity)
+VALUES (100, 1, 30000, 1);
+
+
+SELECT * FROM order_item_non_identifying WHERE order_id = 100;
+
+
+DROP TABLE IF EXISTS order_item_non_identifying;
+
+CREATE TABLE order_item_non_identifying (
+    order_item_id BIGINT NOT NULL AUTO_INCREMENT, -- 독립적인 PK
+    order_id BIGINT NOT NULL, -- 일반 컬럼 + FK
+    product_id BIGINT NOT NULL, -- 일반 컬럼 + FK
+    order_price INT NOT NULL,
+    order_quantity INT NOT NULL,
+    PRIMARY KEY (order_item_id),
+    UNIQUE KEY uq_order_item (order_id, product_id), -- 이 조합은 유일해야 한다.
+    CONSTRAINT fk_oi_non_orders FOREIGN KEY (order_id) 
+        REFERENCES orders_non_identifying(order_id),
+    CONSTRAINT fk_oi_non_product FOREIGN KEY (product_id)
+        REFERENCES product_non_identifying(product_id)
+);
+
+
+-- 100번 주문에 1번 상품(청바지) 추가
+INSERT INTO order_item_non_identifying(order_id, product_id, order_price, order_quantity)
+VALUES (100, 1, 30000, 1);
+
+
+-- 100번 주문에 1번 상품(청바지)을 중복 추가 시도
+INSERT INTO order_item_non_identifying(order_id, product_id, order_price, order_quantity)
+VALUES (100, 1, 30000, 1);
+
+
+
+-- ## 식별 관계 vs 비식별 관계 - 다대다(M:N) 2
+
+-- 1. 새로운 컬럼 추가 (상품에 옵션이 없는 경우도 있으므로 NULL 허용)
+ALTER TABLE order_item_non_identifying
+ADD COLUMN option_id BIGINT NULL;
+
+-- 2. 기존 UNIQUE 제약조건 삭제
+ALTER TABLE order_item_non_identifying
+DROP KEY uq_order_item;
+
+-- 3. 새로운 UNIQUE 제약조건 추가
+ALTER TABLE order_item_non_identifying
+ADD UNIQUE KEY uq_order_item_option (order_id, product_id, option_id);
+
+
+-- 외래 키(Foreign Key) 제약조건 삭제 (MySQL에서는 인덱스 변경 전 FK를 먼저 삭제해야 한다)
+ALTER TABLE order_item_non_identifying DROP FOREIGN KEY fk_oi_non_orders;
+ALTER TABLE order_item_non_identifying DROP FOREIGN KEY fk_oi_non_product;
+
+-- 1. 새로운 컬럼 추가 (상품에 옵션이 없는 경우도 있으므로 NULL 허용)
+ALTER TABLE order_item_non_identifying
+ADD COLUMN option_id BIGINT NULL;
+
+-- 2. 기존 UNIQUE 제약조건 삭제
+ALTER TABLE order_item_non_identifying DROP INDEX uq_order_item;
+
+-- 3. 새로운 UNIQUE 제약조건 추가, option_id 추가
+ALTER TABLE order_item_non_identifying
+ADD UNIQUE KEY uq_order_item_option (order_id, product_id, option_id);
+
+-- 외래 키 제약조건 다시 추가
+ALTER TABLE order_item_non_identifying ADD CONSTRAINT fk_oi_non_orders
+    FOREIGN KEY (order_id) REFERENCES orders_non_identifying(order_id);
+ALTER TABLE order_item_non_identifying ADD CONSTRAINT fk_oi_non_product
+    FOREIGN KEY (product_id) REFERENCES product_non_identifying(product_id);
+
+
+-- order_id=100, product_id=1 (티셔츠)에 대해 옵션만 다르게 주문
+INSERT INTO order_item_non_identifying(order_id, product_id, option_id, order_price, order_quantity)
+VALUES (100, 1, 10, 15000, 2); -- option_id 10: L 사이즈, 흰색
+
+INSERT INTO order_item_non_identifying(order_id, product_id, option_id, order_price, order_quantity)
+VALUES (100, 1, 15, 15000, 1); -- option_id 15: M 사이즈, 검은색
+
+
+
+---------------------------------
+-- # 10. 정규화
+---------------------------------
+
+-- ## 제1 정규형
+
+DROP TABLE IF EXISTS orders_1nf_violating;
+
+-- 제1 정규형을 위반하는 테이블 생성
+CREATE TABLE orders_1nf_violating (
+    order_id INT NOT NULL,
+    ordered_at DATETIME NOT NULL,
+    member_id INT NOT NULL,
+    member_name VARCHAR(50) NOT NULL,
+    product_infos VARCHAR(255) NOT NULL -- 이 컬럼이 원자성을 위반한다.
+);
+
+-- 데이터 삽입
+INSERT INTO orders_1nf_violating (order_id, ordered_at, member_id, member_name, product_infos) VALUES
+(1001, '2025-08-20 10:00:00', 1, '션', '10:노트북:2:1500000,15:키보드:1:50000'),
+(1002, '2025-08-21 11:00:00', 2, '네이트', '10:노트북:1:1500000'),
+(1003, '2025-08-21 12:00:00', 1, '션', '20:마우스:1:30000');
+
+
+SELECT * FROM orders_1nf_violating;
+
+
+DROP TABLE IF EXISTS orders_1nf;
+
+-- 제1 정규형을 만족하는 테이블 생성
+CREATE TABLE orders_1nf (
+    order_id       INT NOT NULL,
+    member_id      INT NOT NULL,
+    member_name    VARCHAR(50) NOT NULL,
+    product_id     INT NOT NULL,
+    product_name   VARCHAR(100) NOT NULL,
+    product_price  INT NOT NULL,
+    order_quantity INT NOT NULL,
+    ordered_at     DATETIME NOT NULL,
+    PRIMARY KEY (order_id, product_id) -- 기본 키를 (order_id, product_id) 복합키로 설정
+);
+
+-- 데이터 삽입
+INSERT INTO orders_1nf (order_id, member_id, member_name, product_id, product_name, product_price, order_quantity, ordered_at) VALUES
+(1001, 1, '션', 10, '노트북', 1500000, 2, '2025-08-20 10:00:00'),
+(1001, 1, '션', 15, '키보드', 50000, 1, '2025-08-20 10:00:00'),
+(1002, 2, '네이트', 10, '노트북', 1500000, 1, '2025-08-21 11:00:00'),
+(1003, 1, '션', 20, '마우스', 30000, 1, '2025-08-21 12:00:00');
+
+
+SELECT * FROM orders_1nf;
+
+
+
+-- ## 제2 정규형
+
+DROP TABLE IF EXISTS order_item_2nf;
+DROP TABLE IF EXISTS orders_2nf;
+DROP TABLE IF EXISTS product_2nf;
+
+-- 1. orders 테이블 생성 (주문 정보)
+CREATE TABLE orders_2nf (
+    order_id   INT NOT NULL,
+    member_id  INT NOT NULL,
+    member_name VARCHAR(50) NOT NULL, -- 아직 3NF 위반 요소를 남겨둔다.
+    ordered_at DATETIME NOT NULL,
+    PRIMARY KEY (order_id)
+);
+
+-- 2. product 테이블 생성 (상품 정보)
+CREATE TABLE product_2nf (
+    product_id   INT NOT NULL,
+    product_name VARCHAR(100) NOT NULL,
+    product_price        INT NOT NULL,
+    PRIMARY KEY (product_id)
+);
+
+-- 3. order_item 테이블 생성 (주문-상품 연결 정보)
+CREATE TABLE order_item_2nf (
+    order_id     INT NOT NULL,
+    product_id   INT NOT NULL,
+    order_price  INT NOT NULL,
+    order_quantity        INT NOT NULL,
+    PRIMARY KEY (order_id, product_id),
+    FOREIGN KEY (order_id) REFERENCES orders_2nf (order_id),
+    FOREIGN KEY (product_id) REFERENCES product_2nf (product_id)
+);
+
+-- product_2nf 데이터 삽입
+INSERT INTO product_2nf (product_id, product_name, product_price) VALUES
+(10, '노트북', 1500000),
+(15, '키보드', 50000),
+(20, '마우스', 30000);
+
+-- orders_2nf 데이터 삽입
+INSERT INTO orders_2nf (order_id, member_id, member_name, ordered_at) VALUES
+(1001, 1, '션', '2025-08-20 10:00:00'),
+(1002, 2, '네이트', '2025-08-21 11:00:00'),
+(1003, 1, '션', '2025-08-21 12:00:00');
+
+-- order_item_2nf 데이터 삽입
+INSERT INTO order_item_2nf (order_id, product_id, order_price, order_quantity) VALUES
+(1001, 10, 1500000, 2),
+(1001, 15, 50000, 1),
+(1002, 10, 1500000, 1),
+(1003, 20, 30000, 1);
+
+
+SELECT * FROM orders_2nf;
+
+SELECT * FROM product_2nf;
+
+SELECT * FROM order_item_2nf;
+
+
+-- ## 제3 정규형
+
+DROP TABLE IF EXISTS orders_3nf;
+DROP TABLE IF EXISTS member_3nf;
+
+-- 1. member 테이블 생성 (회원 정보)
+CREATE TABLE member_3nf (
+    member_id INT NOT NULL,
+    member_name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (member_id)
+);
+
+-- 2. orders 테이블 생성 (주문 정보, member_name 제거)
+CREATE TABLE orders_3nf (
+    order_id   INT NOT NULL,
+    member_id  INT NOT NULL,
+    ordered_at DATETIME NOT NULL,
+    PRIMARY KEY (order_id),
+    FOREIGN KEY (member_id) REFERENCES member_3nf (member_id)
+);
+
+
+-- member_3nf 데이터 삽입 (회원 정보는 이제 중복 없이 한 번만 저장된다)
+INSERT INTO member_3nf (member_id, member_name) VALUES
+(1, '션'),
+(2, '네이트');
+
+-- orders_3nf 데이터 삽입
+INSERT INTO orders_3nf (order_id, member_id, ordered_at) VALUES
+(1001, 1, '2025-08-20 10:00:00'),
+(1002, 2, '2025-08-21 11:00:00'),
+(1003, 1, '2025-08-21 12:00:00');
+
+
+SELECT * FROM member_3nf;
+
+SELECT * FROM orders_3nf;
+
+
+-- ## BCNF 정규형
+
+DROP TABLE IF EXISTS special_lecture_bcnf_violating;
+
+-- BCNF를 위반하는 테이블 생성
+CREATE TABLE special_lecture_bcnf_violating (
+    student_id     INT NOT NULL,
+    lecture_name   VARCHAR(50) NOT NULL,
+    professor_name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (student_id, lecture_name)
+);
+
+-- 데이터 삽입
+INSERT INTO special_lecture_bcnf_violating (student_id, lecture_name, professor_name) VALUES
+(101, '데이터베이스', '김교수'),
+(101, '자바', '서교수'),
+(102, '데이터베이스', '박교수'),
+(103, '자바', '서교수');
+
+
+SELECT * FROM special_lecture_bcnf_violating;
+
+
+DROP TABLE IF EXISTS enrollment_bcnf;
+DROP TABLE IF EXISTS professor_bcnf;
+
+-- 1. professor 테이블 생성 (교수와 담당 특강 정보)
+CREATE TABLE professor_bcnf (
+    professor_name VARCHAR(50) NOT NULL,
+    lecture_name   VARCHAR(50) NOT NULL,
+    PRIMARY KEY (professor_name)
+);
+
+-- 2. enrollment 테이블 생성 (수강 신청 정보)
+CREATE TABLE enrollment_bcnf (
+    student_id     INT NOT NULL,
+    professor_name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (student_id, professor_name),
+    FOREIGN KEY (professor_name) REFERENCES professor_bcnf (professor_name)
+);
+
+
+-- professor_bcnf 데이터 삽입 (교수-특강 정보는 중복 없이 저장된다)
+INSERT INTO professor_bcnf (professor_name, lecture_name) VALUES
+('김교수', '데이터베이스'),
+('서교수', '자바'),
+('박교수', '데이터베이스');
+
+-- enrollment_bcnf 데이터 삽입
+INSERT INTO enrollment_bcnf (student_id, professor_name) VALUES
+(101, '김교수'),
+(101, '서교수'),
+(102, '박교수'),
+(103, '서교수');
+
+
+SELECT * FROM professor_bcnf;
+
+SELECT * FROM enrollment_bcnf;
+
+
+
+---------------------------
+-- # 11. 물리적 모델링
+---------------------------
+
+-- ## 데이터 타입1 - 문자, 숫자, PK 타입
+
+DROP TABLE IF EXISTS member_sample;
+
+CREATE TABLE member_sample (
+    member_id BIGINT PRIMARY KEY,
+    email VARCHAR(100),   -- 이메일 주소는 길이가 다양하다.
+    name VARCHAR(50),     -- 이름도 길이가 다양하다.
+    gender CHAR(1),       -- 성별은 'M' 또는 'F'로 길이가 1로 고정된다.
+    introduction TEXT     -- 자기소개는 매우 길어질 수 있다.
+);
+
+INSERT INTO member_sample (member_id, email, name, gender, introduction)
+VALUES (1, 'test@example.com', '션', 'M', '안녕하세요. 데이터베이스를 배우는 션입니다.');
+
+
+DROP TABLE IF EXISTS product_sample;
+
+CREATE TABLE product_sample (
+    product_id BIGINT PRIMARY KEY,
+    name VARCHAR(100),
+    price DECIMAL(10, 2), -- 99999999.99 까지 저장 가능
+    rating DOUBLE         -- 평점은 근사치로 저장해도 무방
+);
+
+INSERT INTO product_sample (product_id, name, price, rating)
+VALUES (1, '프리미엄 키보드', 159000.00, 4.8);
+
+INSERT INTO product_sample (product_id, name, price, rating)
+VALUES (2, '고급 마우스', 89500.50, 4.9);
+
+
+
+-- ## 데이터 타입2 - 날짜와 시간 타입
+
+DROP TABLE IF EXISTS board_sample;
+
+CREATE TABLE board_sample (
+    board_id    BIGINT          NOT NULL AUTO_INCREMENT,
+    title       VARCHAR(255)    NOT NULL,
+    content     TEXT            NULL,
+    created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (board_id)
+);
+
+INSERT INTO board_sample (title, content) VALUES ('첫 번째 게시글', '게시글 내용입니다.');
+
+SELECT board_id, title, created_at, updated_at FROM board_sample;
+
+UPDATE board_sample
+SET content = '게시글 내용이 수정되었습니다.'
+WHERE board_id = 1;
+
+SELECT board_id, title, created_at, updated_at FROM board_sample;
+
+
+
+--------------------------
+# 12. 물리적 모델링 - 실습
+--------------------------
+
+-- ## 인덱스 설계 - 실습
+
+-- 로그인 시
+SELECT member_id, password FROM member WHERE login_id = 'user123';
+
+-- 이메일로 회원 정보 찾기
+SELECT member_id FROM member WHERE email = 'user123@example.com';
+
+
+-- member_id가 10번인 회원의 모든 주문을 최신순으로 조회한다.
+SELECT *
+FROM orders
+WHERE member_id = 10
+ORDER BY ordered_at DESC;
+
+
+-- 이름에 '노트북'이 포함된 상품을 찾는다.
+SELECT *
+FROM product
+WHERE product_name LIKE '노트북%';
+
+
+-- 2025년 7월 한 달간 취소된 주문을 조회한다.
+SELECT *
+FROM orders
+WHERE order_status = 'CANCELED'
+  AND ordered_at BETWEEN '2025-07-01 00:00:00' AND '2025-07-31 23:59:59';
+
+
+-- member_id가 10번인 회원의 최근 3개월간 '배송 완료(COMPLETED)'된 주문을 조회한다.
+SELECT *
+FROM orders
+WHERE member_id = 10
+  AND order_status = 'COMPLETED'
+  AND ordered_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH);
+
+
+
+-- ## 역정규화 - 실습
+
+SELECT
+    oi.order_id,
+    p.product_name, -- 상품명을 위해 반드시 product 테이블을 JOIN 해야 한다.
+    oi.order_price,
+    oi.order_quantity
+FROM
+    order_item oi
+JOIN
+    product p ON oi.product_id = p.product_id
+WHERE
+    oi.order_id = 100;
+
+
+-- ## 쇼핑몰 DDL과 DB 만들기
+
+------------------------------------------
+-- 데이터베이스 초기화
+------------------------------------------
+DROP DATABASE IF EXISTS my_shop3_ex;
+CREATE DATABASE my_shop3_ex;
+USE my_shop3_ex;
+
+------------------------------------------
+-- 테이블 초기화 (외래 키 종속성을 고려하여 자식 테이블부터 삭제)
+------------------------------------------
+DROP TABLE IF EXISTS pay;
+DROP TABLE IF EXISTS delivery;
+DROP TABLE IF EXISTS order_item;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS product;
+DROP TABLE IF EXISTS member;
+
+-- 1. member 테이블
+CREATE TABLE member (
+  member_id BIGINT  NOT NULL AUTO_INCREMENT, -- 회원 ID (PK)
+  login_id VARCHAR(50) NOT NULL,    -- 로그인 ID
+  password VARCHAR(255) NOT NULL,    -- 비밀번호 (암호화)
+  member_name  VARCHAR(50) NOT NULL,    -- 이름
+  email  VARCHAR(100) NOT NULL,    -- 이메일
+  addr VARCHAR(255) NULL,     -- 주소
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (member_id),
+  UNIQUE KEY uq_login_id (login_id),
+  UNIQUE KEY uq_email (email)
+);
+
+-- 2. product 테이블
+CREATE TABLE product (
+  product_id BIGINT  NOT NULL AUTO_INCREMENT, -- 상품 ID (PK)
+  product_name  VARCHAR(100) NOT NULL,    -- 상품명
+  product_price  INT   NOT NULL,    -- 가격
+  stock_quantity INT   NOT NULL DEFAULT 0, -- 재고 수량
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (product_id),
+  INDEX idx_product_name (product_name) -- 상품명 검색용 인덱스
+);
+
+-- 3. orders 테이블
+CREATE TABLE orders (
+  order_id BIGINT  NOT NULL AUTO_INCREMENT, -- 주문 ID (PK)
+  member_id BIGINT  NOT NULL,    -- 회원 ID (FK)
+  ordered_at DATETIME NOT NULL,  -- 주문일 (애플리케이션에서 생성)
+  order_status VARCHAR(20) NOT NULL DEFAULT 'ORDERED', -- 주문 상태
+  total_amount INT   NOT NULL,    -- 총 주문 금액 (역정규화)
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (order_id),
+  CONSTRAINT fk_orders_member FOREIGN KEY (member_id)
+    REFERENCES member (member_id),
+  INDEX idx_order_status_ordered_at (order_status, ordered_at) -- 관리자용 주문 조회 인덱스
+);
+
+-- 4. order_item 테이블
+CREATE TABLE order_item (
+  order_item_id BIGINT  NOT NULL AUTO_INCREMENT, -- 주문 상품 ID (PK)
+  order_id BIGINT  NOT NULL,    -- 주문 ID (FK)
+  product_id BIGINT  NOT NULL,    -- 상품 ID (FK)
+  product_name VARCHAR(100) NOT NULL,    -- 주문 당시 상품명 (역정규화)
+  order_price INT   NOT NULL,    -- 주문 당시 가격
+  order_quantity  INT   NOT NULL,    -- 주문 수량
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (order_item_id),
+  CONSTRAINT fk_order_item_orders FOREIGN KEY (order_id)
+    REFERENCES orders (order_id),
+  CONSTRAINT fk_order_item_product FOREIGN KEY (product_id)
+    REFERENCES product (product_id)
+);
+
+-- 5. delivery 테이블
+CREATE TABLE delivery (
+  delivery_id BIGINT  NOT NULL AUTO_INCREMENT, -- 배송 ID (PK)
+  order_id  BIGINT  NOT NULL,    -- 주문 ID (FK, Unique)
+  delivery_status  VARCHAR(20) NOT NULL DEFAULT 'READY',-- 배송 상태
+  tracking_no VARCHAR(50) NULL,     -- 운송장 번호
+  ship_addr VARCHAR(255) NOT NULL,    -- 배송지
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (delivery_id),
+  UNIQUE KEY uq_delivery_order_id (order_id), -- 주문 하나당 배송은 하나
+  CONSTRAINT fk_delivery_orders FOREIGN KEY (order_id)
+    REFERENCES orders (order_id)
+);
+
+-- 6. pay 테이블
+CREATE TABLE pay (
+  pay_id BIGINT  NOT NULL AUTO_INCREMENT, -- 결제 ID (PK)
+  order_id BIGINT  NOT NULL,    -- 주문 ID (FK, Unique)
+  pay_method VARCHAR(50) NOT NULL,    -- 결제 수단
+  pay_amount  INT   NOT NULL,    -- 결제 금액
+  pay_status  VARCHAR(20) NOT NULL,    -- 결제 상태
+  paid_at DATETIME NULL,     -- 결제 완료일
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (pay_id),
+  UNIQUE KEY uq_pay_order_id (order_id), -- 주문 하나당 결제는 하나
+  CONSTRAINT fk_pay_orders FOREIGN KEY (order_id)
+    REFERENCES orders (order_id)
+);
+
+
+------------------------------------------
+-- 샘플 데이터 입력 (DML)
+------------------------------------------
+
+-- 1. 회원 데이터
+-- 실제 서비스에서는 비밀번호를 반드시 암호화(해싱)하여 저장해야 한다.
+INSERT INTO member(login_id, password, member_name, email, addr)
+VALUES
+('sejong', 'pass123!', '세종대왕', 'sejong@example.com', '서울시 종로구'),
+('sunsin', 'pass456!', '이순신', 'sunsin@example.com', '전라남도 여수시'),
+('curie', 'pass789!', '마리 퀴리', 'curie@example.com', '프랑스 파리'),
+('nate', 'pass101!', '네이트', 'nate@example.com', '서울시 송파구'),
+('jobs', 'pass112!', '스티브 잡스', 'jobs@example.com', '미국 캘리포니아'),
+('sean', 'pass131!', '션', 'sean@example.com', '성남시 분당구');
+
+-- 2. 상품 데이터 (IT 기기 및 전문 서적)
+INSERT INTO product(product_name, product_price, stock_quantity)
+VALUES
+('싱크패드 노트북', 3500000, 15),
+('리얼포스 키보드', 380000, 40),
+('델 모니터', 1200000, 25),
+('JPA 프로그래밍 책', 32000, 150),
+('로지텍 지슈라2 마우스', 139000, 200),
+('로지텍 웹캠', 450000, 30),
+('갤럭시 S25 휴대폰', 1800000, 50),
+('아이폰 17', 1900000, 50);
+
+
+-- 3. 주문 데이터 & 관련 데이터 (주문, 주문상품, 배송, 결제)
+-- 시나리오 1: 세종대왕, 'JPA 프로그래밍 책' 도서 1권 주문 (배송 완료)
+INSERT INTO orders(member_id, ordered_at, order_status, total_amount)
+VALUES
+(1, '2025-09-05 10:00:00', 'COMPLETED', 32000);
+SET @last_order_id = LAST_INSERT_ID();
+
+INSERT INTO order_item(order_id, product_id, product_name, order_price, order_quantity)
+VALUES
+(@last_order_id, 4, 'JPA 프로그래밍 책', 32000, 1);
+
+INSERT INTO delivery(order_id, delivery_status, tracking_no, ship_addr)
+VALUES
+(@last_order_id, 'COMPLETED', 'KR13970515', '서울시 종로구 경복궁');
+
+INSERT INTO pay(order_id, pay_method, pay_amount, pay_status, paid_at)
+VALUES
+(@last_order_id, 'BANK_TRANSFER', 32000, 'PAID', '2025-09-05 10:05:00');
+
+
+-- 시나리오 2: 이순신, 전투 지휘용 '델 모니터' 1대 주문 (배송중)
+INSERT INTO orders(member_id, ordered_at, order_status, total_amount)
+VALUES
+(2, '2025-09-15 14:30:00', 'SHIPPING', 1200000);
+SET @last_order_id = LAST_INSERT_ID();
+
+INSERT INTO order_item(order_id, product_id, product_name, order_price, order_quantity)
+VALUES
+(@last_order_id, 3, '델 모니터', 1200000, 1);
+
+INSERT INTO delivery(order_id, delivery_status, tracking_no, ship_addr)
+VALUES
+(@last_order_id, 'SHIPPING', 'KR15450428', '전라남도 여수시 진남관');
+
+INSERT INTO pay(order_id, pay_method, pay_amount, pay_status, paid_at)
+VALUES
+(@last_order_id, 'CARD', 1200000, 'PAID', '2025-09-15 14:32:00');
+
+
+-- 시나리오 3: 네이트, '싱크패드 노트북'과 '리얼포스 키보드' 주문 (배송 준비)
+INSERT INTO orders(member_id, ordered_at, order_status, total_amount)
+VALUES
+(4, '2025-09-20 09:00:00', 'ORDERED', 3880000);
+SET @last_order_id = LAST_INSERT_ID();
+
+INSERT INTO order_item(order_id, product_id, product_name, order_price, order_quantity)
+VALUES
+(@last_order_id, 1, '싱크패드 노트북', 3500000, 1),
+(@last_order_id, 2, '리얼포스 키보드', 380000, 1);
+
+INSERT INTO delivery(order_id, delivery_status, ship_addr)
+VALUES
+(@last_order_id, 'READY', '서울시 송파구 잠실동');
+
+INSERT INTO pay(order_id, pay_method, pay_amount, pay_status, paid_at)
+VALUES
+(@last_order_id, 'CARD', 3880000, 'PAID', '2025-09-20 09:01:00');
+
+
+-- 시나리오 4: 스티브 잡스, '갤럭시 S25 휴대폰'을 주문했으나 취소
+INSERT INTO orders(member_id, ordered_at, order_status, total_amount)
+VALUES
+(5, '2025-09-11 18:00:00', 'CANCELED', 1800000);
+SET @last_order_id = LAST_INSERT_ID();
+
+INSERT INTO order_item(order_id, product_id, product_name, order_price, order_quantity)
+VALUES
+(@last_order_id, 7, '갤럭시 S25 휴대폰', 1800000, 1);
+
+INSERT INTO delivery(order_id, delivery_status, tracking_no, ship_addr)
+VALUES
+(@last_order_id, 'SHIPPING', 'EA12341234', '미국 캘리포니아');
+
+INSERT INTO pay(order_id, pay_method, pay_amount, pay_status)
+VALUES
+(@last_order_id, 'CARD', 1800000, 'CANCELED');
+
+
+-- 시나리오 5: 션, 'JPA 프로그래밍 책'과 '로지텍 지슈라2 마우스' 주문 (배송 완료)
+INSERT INTO orders(member_id, ordered_at, order_status, total_amount)
+VALUES
+(6, '2025-08-25 21:00:00', 'COMPLETED', 171000);
+SET @last_order_id = LAST_INSERT_ID();
+
+INSERT INTO order_item(order_id, product_id, product_name, order_price, order_quantity)
+VALUES
+(@last_order_id, 4, 'JPA 프로그래밍 책', 32000, 1),
+(@last_order_id, 5, '로지텍 지슈라2 마우스', 139000, 1);
+
+INSERT INTO delivery(order_id, delivery_status, tracking_no, ship_addr)
+VALUES
+(@last_order_id, 'COMPLETED', 'KR19691228', '성남시 분당구 판교동');
+
+INSERT INTO pay(order_id, pay_method, pay_amount, pay_status, paid_at)
+VALUES
+(@last_order_id, 'CARD', 171000, 'PAID', '2025-08-25 21:05:00');
+
+
+-- 시나리오 6: 션, '싱크패드 노트북'과 '로지텍 웹캠' 추가 주문 (배송중)
+INSERT INTO orders(member_id, ordered_at, order_status, total_amount)
+VALUES
+(6, '2025-09-22 13:10:00', 'SHIPPING', 3950000);
+SET @last_order_id = LAST_INSERT_ID();
+
+INSERT INTO order_item(order_id, product_id, product_name, order_price, order_quantity)
+VALUES
+(@last_order_id, 1, '싱크패드 노트북', 3500000, 1),
+(@last_order_id, 6, '로지텍 웹캠', 450000, 1);
+
+INSERT INTO delivery(order_id, delivery_status, tracking_no, ship_addr)
+VALUES
+(@last_order_id, 'SHIPPING', 'KR20250922', '성남시 분당구 정자동');
+
+INSERT INTO pay(order_id, pay_method, pay_amount, pay_status, paid_at)
+VALUES
+(@last_order_id, 'CARD', 3950000, 'PAID', '2025-09-22 13:11:00');
+
+
+
+
+-- ## 쇼핑몰 기능 확인1
+
+EXPLAIN
+SELECT
+    member_id,
+    login_id,
+    password, -- 애플리케이션에서 비밀번호 검증을 위해 사용될 암호화된 비밀번호
+    member_name
+FROM
+    member
+WHERE
+    login_id = 'sejong';
+
+SELECT
+    member_id,
+    login_id,
+    password,
+    member_name
+FROM
+    member
+WHERE
+    login_id = 'sejong';
+
+
+EXPLAIN
+SELECT order_id, ordered_at, order_status, total_amount
+FROM orders
+WHERE member_id = 6
+ORDER BY ordered_at DESC;
+
+SELECT order_id, ordered_at, order_status, total_amount
+FROM orders
+WHERE member_id = 6
+ORDER BY ordered_at DESC;
+
+
+-- 역정규화를 하지 않았다면 매번 실행해야 했을 복잡한 쿼리
+SELECT
+    o.order_id,
+    o.ordered_at,
+    o.order_status,
+    SUM(oi.order_price * oi.order_quantity) AS calculated_total_amount
+FROM
+    orders o
+JOIN
+    order_item oi ON o.order_id = oi.order_id
+WHERE
+    o.member_id = 6
+GROUP BY
+    o.order_id, o.ordered_at, o.order_status
+ORDER BY
+    o.ordered_at DESC;
+
+
+EXPLAIN
+SELECT product_id, product_name, product_price
+FROM product
+WHERE product_name LIKE 'JPA%';
+
+SELECT product_id, product_name, product_price
+FROM product
+WHERE product_name LIKE 'JPA%';
+
+
+EXPLAIN
+SELECT order_id, member_id, ordered_at, order_status
+FROM orders
+WHERE order_status = 'CANCELED'
+  AND ordered_at BETWEEN '2025-09-01 00:00:00' AND '2025-09-30 23:59:59';
+
+SELECT order_id, member_id, ordered_at, order_status
+FROM orders
+WHERE order_status = 'CANCELED'
+  AND ordered_at BETWEEN '2025-09-01 00:00:00' AND '2025-09-30 23:59:59';
+
+
+-- product 테이블과 JOIN 할 필요가 없다.
+SELECT order_item_id, product_name, order_price, order_quantity
+FROM order_item
+WHERE order_id = 3;
+
+-- 역정규화를 하지 않았다면 매번 실행해야 했을 쿼리
+SELECT
+    oi.order_item_id,
+    p.product_name,
+    oi.order_price,
+    oi.order_quantity
+FROM
+    order_item oi
+JOIN
+    product p ON oi.product_id = p.product_id
+WHERE
+    oi.order_id = 3;    
+
+
+
+-- ## 쇼핑몰 기능 확인2
+
+SELECT
+    DATE_FORMAT(ordered_at, '%Y-%m') AS `year_month`,
+    COUNT(order_id) AS total_orders,
+    SUM(total_amount) AS total_sales
+FROM
+    orders
+WHERE
+    order_status NOT IN ('CANCELED') -- 취소된 주문은 매출에서 제외
+GROUP BY
+    `year_month`
+ORDER BY
+    `year_month`;
+
+
+-- 판매량 기준 TOP 5
+SELECT
+    oi.product_name,
+    SUM(oi.order_quantity) AS total_quantity_sold,
+    SUM(oi.order_price * oi.order_quantity) AS total_sales_amount
+FROM
+    order_item oi
+JOIN
+    orders o ON oi.order_id = o.order_id
+WHERE
+    o.order_status NOT IN ('CANCELED')
+AND
+    o.ordered_at BETWEEN '2025-08-01 00:00:00' AND '2025-09-30 23:59:59'
+GROUP BY
+    oi.product_name
+ORDER BY
+    total_quantity_sold DESC, total_sales_amount DESC
+LIMIT 5;
+
+
+SELECT
+    m.member_id,
+    m.member_name,
+    m.email,
+    SUM(o.total_amount) AS total_purchase_amount,
+    COUNT(o.order_id) AS total_order_count
+FROM
+    member m
+JOIN
+    orders o ON m.member_id = o.member_id
+WHERE
+    o.order_status NOT IN ('CANCELED')
+GROUP BY
+    m.member_id, m.member_name, m.email
+ORDER BY
+    total_purchase_amount DESC
+LIMIT 2;
+
+
+SELECT
+    product_id,
+    product_name,
+    stock_quantity
+FROM
+    product
+WHERE
+    stock_quantity < 50
+ORDER BY
+    stock_quantity ASC;
+
